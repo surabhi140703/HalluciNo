@@ -7,7 +7,7 @@ def load_pdf(folder_path):
     all_papers_data=[]
     papers_dir= Path(folder_path)
 
-    for pdf_file in papers_dir.glob("*pdf"):
+    for pdf_file in papers_dir.glob("*.pdf"):
         print(f"processing {pdf_file.name}")
         try:
             doc= p.open(pdf_file)

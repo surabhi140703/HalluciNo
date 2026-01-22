@@ -2,5 +2,6 @@
 .virtualenv/
 venv/
 env/
+data/raw_pdfs
 
 

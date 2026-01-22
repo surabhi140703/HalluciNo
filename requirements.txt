@@ -1,0 +1,4 @@
+arxiv
+docling
+pydantic
+tqdm

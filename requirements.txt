@@ -2,3 +2,4 @@ arxiv
 docling
 pydantic
 tqdm
+nltk

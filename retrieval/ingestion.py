@@ -22,7 +22,7 @@ def fetch_arxiv_pdfs(id_list):
     downloaded_paths=[]
 
     for paper in client.results(search):
-        clean_title = re.sub(r'[^\w\-_\. ]', '_', paper.title)[:50]
+        clean_title = re.sub(r'[^\w\-_\. ]', '_', paper.title)[:100]
         filename = f"{paper.get_short_id()}_{clean_title}.pdf"
         file_path= DATA_DIR/filename
 

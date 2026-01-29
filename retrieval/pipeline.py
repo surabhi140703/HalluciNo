@@ -3,10 +3,11 @@ import uuid
 from typing import List
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
 from openai import OpenAI  # Or your preferred LLM client
+from dotenv import load_dotenv
 
-GEMINI_API_KEY="AIzaSyCr14AMI_tUwvujqAfo6pWvfyFBcHMqxJE"
+GEMINI_API_KEY= os.getenv("GOOGLE_API_KEY")
 DB_PATH = "data/vector_db"
 COLLECTION_NAME = "hallucination_papers"
 EMBEDDING_MODEL = "multi-qa-mpnet-base-dot-v1" 
@@ -16,6 +17,7 @@ class RAGPipeline:
     def __init__(self):
         print("Loading embedding model...")
         self.encoder = SentenceTransformer(EMBEDDING_MODEL)
+        self.reranker= CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
         self.client = QdrantClient(path=DB_PATH)
         
         if not self.client.collection_exists(COLLECTION_NAME):
@@ -53,9 +55,19 @@ class RAGPipeline:
         hits = self.client.search(
             collection_name=COLLECTION_NAME,
             query_vector=query_vector,
-            limit=top_k
+            limit=25
         )
-        return [hit.payload for hit in hits]
+        if not hits:
+            return []
+        
+        cross_inp= [[query, hit.payload['text']] for hit in hits]
+        cross_scores= self.reranker.predict(cross_inp)
+
+        for idx,hit in enumerate(hits):
+            hit.score= cross_scores[idx]
+
+        hits = sorted(hits, key= lambda x:x.score, reverse=True)
+        return [hit.payload for hit in hits[:top_k]]
 
     def reason_and_answer(self, query: str):
         print(f"Querying: {query}")
@@ -106,6 +118,6 @@ class RAGPipeline:
 
 if __name__ == "__main__":
     rag = RAGPipeline()
-    answer = rag.reason_and_answer("What transformer architecture modifications eliminate hallucination entirely?")
+    answer = rag.reason_and_answer("What did i eat today?")
     print("\nModel response: \n")
     print(answer)

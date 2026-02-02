@@ -117,115 +117,100 @@ def enrich_table_markdown(table_md, metadata, caption=""):
     
     return header + table_md
 
-def run_chunking():
-    print("Initializing Docling Layout Engine...")
+# --- CHANGE: Replace the entire run_chunking() function with this ---
+
+def process_single_pdf(pdf_path: Path):
+    """
+    Processes a single PDF and returns a list of dictionaries (chunks).
+    This is called by your Streamlit app.
+    """
+    # 1. Setup Docling (Moved inside to ensure fresh state for each dynamic upload)
     pipeline_options = PdfPipelineOptions(do_table_structure=True)
     pipeline_options.table_structure_options.do_cell_matching = True
-    
     converter = DocumentConverter(
         format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
     )
 
-    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    all_pdfs = list(INPUT_DIR.glob("*.pdf"))
-    final_knowledge_base = []
+    print(f"Processing: {pdf_path.name}")
+    try:
+        result = converter.convert(pdf_path)
+        doc = result.document
+    except Exception as e:
+        print(f"!! Error parsing: {e}")
+        return []
 
-    for pdf_path in all_pdfs:
-        print(f"\nProcessing: {pdf_path.name}")
+    # 2. Extract Metadata (Handling dynamic filenames from Streamlit)
+    # If the filename is "2401.00396_RAGTruth.pdf", split it. 
+    # Otherwise, use the whole filename as the title.
+    file_parts = pdf_path.stem.split("_", 1)
+    arxiv_id = file_parts[0] if len(file_parts) > 1 else "upload"
+    doc_title = file_parts[1] if len(file_parts) > 1 else pdf_path.stem
+
+    chunker = SemanticChunker()
+    current_section = "Abstract"
+    previous_text_element = "" 
+    paper_knowledge_base = [] # Local list for this specific paper
+
+    # 3. The Core Loop (Your existing logic, slightly adjusted)
+    for item_ref in doc.body.children:
         try:
-            result = converter.convert(pdf_path)
-            doc = result.document
-        except Exception as e:
-            print(f"!! Error parsing: {e}")
+            element = item_ref.resolve(doc)
+        except AttributeError: continue
+        if not hasattr(element, "label"): continue
+
+        # HEADERS logic
+        if element.label == "section_header":
+            text = element.text.strip()
+            if any(x in text.lower() for x in ["references", "bibliography"]):
+                break 
+            if is_valid_header(text):
+                chunker._flush_chunk(force=True) 
+                current_section = text
             continue
 
-        # Meta extraction
-        file_parts = pdf_path.stem.split("_", 1)
-        arxiv_id = file_parts[0]
-        doc_title = file_parts[1] if len(file_parts) > 1 else pdf_path.stem
+        # TABLES logic
+        if element.label == "table":
+            chunker._flush_chunk(force=True)
+            table_md = element.export_to_markdown(doc=doc)
+            caption = previous_text_element if previous_text_element.strip().lower().startswith("table") else ""
+            
+            meta = {
+                "source_id": arxiv_id,
+                "source_title": doc_title,
+                "section": current_section,
+                "type": "table",
+                "page": element.prov[0].page_no if element.prov else 0
+            }
 
-        chunker = SemanticChunker()
-        current_section = "Abstract"
-        previous_text_element = "" 
-        
-        for item_ref in doc.body.children:
-            try:
-                element = item_ref.resolve(doc)
-            except AttributeError: continue
-            if not hasattr(element, "label"): continue
+            paper_knowledge_base.append({
+                "chunk_id": f"{arxiv_id}_tb_{len(paper_knowledge_base)}",
+                "text": enrich_table_markdown(table_md, meta, caption),
+                "metadata": meta
+            })
+            previous_text_element = ""
+            continue
 
-            #HEADERS
-            if element.label == "section_header":
-                text = element.text.strip()
-                if any(x in text.lower() for x in ["references", "bibliography"]):
-                    print("  -> Bibliography reached. Finalizing paper.")
-                    break 
-                
-                if is_valid_header(text):
-                    chunker._flush_chunk(force=True) 
-                    current_section = text
-                continue
+        # TEXT logic
+        if element.label == "text":
+            raw_text = clean_text_noise(element.text)
+            if not raw_text or len(raw_text) < 10: continue
+            previous_text_element = raw_text 
 
-            #TABLES
-            if element.label == "table":
-                chunker._flush_chunk(force=True)
-                
-                table_md = element.export_to_markdown(doc=doc)
-                
-                caption = ""
-                if previous_text_element.strip().lower().startswith("table"):
-                    caption = previous_text_element.strip()
-
+            sentences = nltk.sent_tokenize(raw_text)
+            for sent in sentences:
                 meta = {
                     "source_id": arxiv_id,
                     "source_title": doc_title,
                     "section": current_section,
-                    "type": "table",
+                    "type": "text",
                     "page": element.prov[0].page_no if element.prov else 0
                 }
+                chunker.add_sentence(sent, meta)
 
-                searchable_text = enrich_table_markdown(table_md, meta, caption)
-
-                # Tables get IDs immediately here
-                final_knowledge_base.append({
-                    "chunk_id": f"{arxiv_id}_tb_{len(final_knowledge_base)}",
-                    "text": searchable_text,
-                    "metadata": meta
-                })
-                
-                print(f"  -> Captured Table: {caption[:50]}...")
-                previous_text_element = ""
-                continue
-
-            #TEXT
-            if element.label == "text":
-                raw_text = clean_text_noise(element.text)
-                if not raw_text or len(raw_text) < 10: continue
-                
-                previous_text_element = raw_text 
-
-                sentences = nltk.sent_tokenize(raw_text)
-                for sent in sentences:
-                    meta = {
-                        "source_id": arxiv_id,
-                        "source_title": doc_title,
-                        "section": current_section,
-                        "type": "text",
-                        "page": element.prov[0].page_no if element.prov else 0
-                    }
-                    chunker.add_sentence(sent, meta)
-        paper_text_chunks = chunker.finalize()
-        
-        for i, chunk in enumerate(paper_text_chunks):
-            chunk["chunk_id"] = f"{arxiv_id}_tx_{i}"
-        final_knowledge_base.extend(paper_text_chunks)
-
-    #saving
-    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        for chunk in final_knowledge_base:
-            f.write(json.dumps(chunk) + '\n')
-            
-    print(f"\nSaved {len(final_knowledge_base)} chunks to {OUTPUT_FILE}")
+    # 4. Finalize and return
+    paper_text_chunks = chunker.finalize()
+    for i, chunk in enumerate(paper_text_chunks):
+        chunk["chunk_id"] = f"{arxiv_id}_tx_{len(paper_knowledge_base) + i}"
     
-if __name__ == "__main__":
-    run_chunking()
+    paper_knowledge_base.extend(paper_text_chunks)
+    return paper_knowledge_base

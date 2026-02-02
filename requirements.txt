@@ -3,3 +3,8 @@ docling
 pydantic
 tqdm
 nltk
+langchain
+langgraph
+langchain_community
+langchain-ollama
+streamlit

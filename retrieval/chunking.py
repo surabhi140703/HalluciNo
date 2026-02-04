@@ -5,7 +5,24 @@ from pathlib import Path
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions, AcceleratorOptions, AcceleratorDevice
+import multiprocessing
 
+def get_optimized_converter():
+    cpu_count = multiprocessing.cpu_count()
+    accel = AcceleratorOptions(num_threads=cpu_count, device=AcceleratorDevice.AUTO)
+
+    pipeline_options = PdfPipelineOptions()
+    pipeline_options.accelerator_options = accel
+    
+    pipeline_options.generate_page_images = False
+    pipeline_options.generate_picture_images = False
+    
+    return DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+        }
+    )
 try:
     nltk.data.find('tokenizers/punkt_tab')
 except LookupError:
@@ -25,6 +42,8 @@ GARBAGE_HEADERS = [
     r"^\d+$", r"^(19|20)\d{2}$", r"arXiv:\d+\.\d+", 
     r"(ICML|NeurIPS|ICLR|ACL|IEEE)\s?\d*", r"All rights reserved"
 ]
+
+
 
 class SemanticChunker:
     def __init__(self):
